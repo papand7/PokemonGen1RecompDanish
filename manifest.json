@@ -1,0 +1,7 @@
+{
+  "id": "danish_voicelines",
+  "name": "Danish/English Language Pack (Text + Voice)",
+  "version": "1.7b",
+  "entry": "main.lua",
+  "api": 2
+}
