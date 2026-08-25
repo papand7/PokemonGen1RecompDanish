@@ -1,0 +1,1 @@
+This is very much a work in progress! I made this so my son could play Pokémon — he can't read yet and doesn't speak English, so I translated the entire game into Danish and added Danish voice acting to every conversation, sign, and battle message I could find. I hope it's useful to others in the same boat. This has only been tested on red/blue
