@@ -9661,6 +9661,17 @@ local TYPE_NAMES = {
         voiceEnabled = true
     end
 
+    -- Separate on/off toggle specifically for battle text voice, since
+    -- it's far more frequent than overworld dialogue (a new line for
+    -- nearly every turn) and some players may want it off even with
+    -- general voice on. Checked only in BattleState.startMessage's
+    -- hook, below - overworld/menu voice is entirely unaffected by
+    -- this setting.
+    local battleVoiceEnabled = mod.save:get("battle_voice_enabled")
+    if battleVoiceEnabled == nil then
+        battleVoiceEnabled = true
+    end
+
     -- Persisted volume as a simple 1-5 level (not raw percentage), each
     -- level mapped to a percentage in VOLUME_LEVELS. Level 1 = 100%,
     -- matching the volume control's previous default before this was
@@ -10115,7 +10126,27 @@ local TYPE_NAMES = {
             -- everywhere before this fix. Kept as a separate, named
             -- function (rather than inlined) so both call sites stay
             -- readable.
+            --
+            -- Skips triggering a new clip entirely if one is already
+            -- mid-playback, rather than interrupting it - confirmed via
+            -- user report that battle messages were audibly cut off
+            -- partway through. Battle messages can arrive faster than a
+            -- clip's natural duration (the player pressing A quickly
+            -- through several turns), and playVoiceSequence always
+            -- stops whatever's currently playing before starting the
+            -- next one - so without this check, a fast player would
+            -- never hear a single complete line. Some messages ending
+            -- up silent when battle moves quickly is a better trade-off
+            -- than every line being chopped short.
             local function tryPlayVoiceForTextByDuration(text)
+                local isCurrentlyPlaying = false
+                if sequenceSource then
+                    local ok, playing = pcall(function() return sequenceSource:isPlaying() end)
+                    isCurrentlyPlaying = ok and playing
+                end
+                if isCurrentlyPlaying then
+                    return false
+                end
                 local sequence = findVoiceSequenceForText(text)
                 if not sequence then return false end
                 writeDebugLog("tryPlayVoiceForTextByDuration: playing sequence of " .. #sequence .. " key(s) for text=" .. text:sub(1, 80) .. " -> " .. table.concat(sequence, ", "))
@@ -10204,10 +10235,48 @@ local TYPE_NAMES = {
             if okBS and BattleState and type(BattleState.startMessage) == "function" then
                 local originalStartMessage = BattleState.startMessage
                 BattleState.startMessage = function(self, item)
-                    if item then
+                    if item and battleVoiceEnabled then
                         tryPlayVoiceForTextByDuration(item.text)
                     end
                     return originalStartMessage(self, item)
+                end
+            end
+
+            -- Pokedex entry descriptions ALSO never go through TextBox.new
+            -- or BattleState - confirmed directly from real engine source
+            -- (src/ui/DexEntryMenu.lua): DexEntryMenu.render draws the
+            -- description with plain Font.draw calls, one line at a time,
+            -- entirely separate from both existing hooks. Voiced as Oak
+            -- specifically (reclassified in dialogue_danish_voiced.csv,
+            -- not a code change) since he's the one who explains Pokemon
+            -- to the player throughout the game - a neutral narrator
+            -- voice reading dex entries felt like the wrong character.
+            --
+            -- render() redraws every frame the entry screen is open (it's
+            -- the :draw() body, not a one-time construction), so this
+            -- relies entirely on playVoiceForKey's own replay guard to
+            -- avoid restarting the clip 60 times a second - deliberately
+            -- NOT tracked with any extra state here. Ownership-gating
+            -- (owned = forceOwned or game.save.pokedex.owned[def.id])
+            -- mirrors the real render() logic exactly, since an unseen
+            -- Pokemon's entry is never actually shown either.
+            local okDex, DexEntryMenu = pcall(require, "src.ui.DexEntryMenu")
+            if okDex and DexEntryMenu and type(DexEntryMenu.render) == "function" then
+                local originalDexRender = DexEntryMenu.render
+                DexEntryMenu.render = function(game, def, sprite, forceOwned, trueColor)
+                    local ok, err = pcall(function()
+                        local owned = forceOwned
+                            or (def and def.id and game.save.pokedex and game.save.pokedex.owned
+                                and game.save.pokedex.owned[def.id])
+                        local e = def and def.dexEntry
+                        if owned and e and e.text then
+                            playVoiceForKey(e.text)
+                        end
+                    end)
+                    if not ok then
+                        writeDebugLog("DexEntryMenu.render voice hook threw: " .. tostring(err))
+                    end
+                    return originalDexRender(game, def, sprite, forceOwned, trueColor)
                 end
             end
         end)
@@ -10617,6 +10686,21 @@ local TYPE_NAMES = {
                 mod.save:set("fast_voice_enabled", fastVoiceEnabled)
                 applyPlaybackSpeed()
                 mod.log:info("Fast voice set to %s - restart to (de)activate speed-change detection", tostring(fastVoiceEnabled))
+            end,
+        })
+
+        table.insert(rows, {
+            label = "BATTLE VOICE",
+            id = "danishBattleVoiceEnabled",
+            value = function()
+                return battleVoiceEnabled and "ON" or "OFF"
+            end,
+            step = function(direction)
+                battleVoiceEnabled = not battleVoiceEnabled
+                mod.save:set("battle_voice_enabled", battleVoiceEnabled)
+                if not battleVoiceEnabled then
+                    stopVoice()
+                end
             end,
         })
 
