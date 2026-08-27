@@ -3,5 +3,6 @@
   "name": "Danish/English Language Pack (Text + Voice)",
   "version": "1.8b",
   "entry": "main.lua",
-  "api": 2
+  "api": 2,
+  "optional_dependencies": ["roaming_trainers"]
 }
